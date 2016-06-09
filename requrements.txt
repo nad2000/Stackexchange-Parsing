@@ -1,0 +1,6 @@
+requests
+beautifulsoup4
+# for testing:
+responses
+pytest
+
