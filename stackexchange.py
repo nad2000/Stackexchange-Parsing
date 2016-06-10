@@ -79,7 +79,7 @@ class Scraper(object):
         Generator for retrieving the questions starting from `fromdate` till `todate`
         `fromdate` and `todate` are either datetime, date, or int (Unix Epoch)
         """
-        url = (config.API_BASE_URL + "questions?&filter="
+        url = (config.API_BASE_URL + "questions?filter="
                "!)Ehv2Yl*OhhLOkeHr5)YcUAgEK*(hc7aypu_0Y_ehVcszKs.-"
                "&order=desc&sort=creation"
                "&site=" + site)
@@ -146,6 +146,10 @@ class Scraper(object):
 
     @classmethod
     def process(cls, site="meta"):
+        """
+        Collects data for a single Stackexchange site and 
+        stores extracted JSON  on $OUTPUT_DIR/`site API name`.
+        """
 
         scraper = cls()
         output_dir = os.path.join(config.OUTPUT_DIR, site)

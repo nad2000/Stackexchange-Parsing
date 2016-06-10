@@ -44,3 +44,29 @@ def test_sites():
     assert "test" in res
     assert res["test"]["name"] == "TEST STACK"
 
+@responses.activate
+def test_questions():
+    ## a workaround to make mocking working
+    #stackexchange.config.API_BASE_URL = "http://test.test/" 
+    responses.add(
+        responses.GET,
+        url = re.compile(API_BASE_URL + "questions\\?filter=.*"
+                    "&order=desc&sort=creation&site=.*"),
+        json={"items": [{
+            "site_state": "normal",
+            "site_url": "http://quetest_test.test",
+            "api_site_parameter": "test",
+            "name": "TEST STACK",
+            "site_type": "main_site"
+        }]},
+        content_type='application/json',
+        match_querystring=True)
+
+    scraper = stackexchange.Scraper()
+    res = list(scraper.questions(site="TEST_TEST_TEST") )
+    print("***", res)
+    print("***", responses.calls)
+    print("***", responses.calls[0].request)
+    assert len(responses.calls) == 1
+    #assert responses.calls[0].request.url == 'http://twitter.com/api/1/foobar'
+
