@@ -23,14 +23,14 @@ def to_epoch(timestamp=None):
     """
     if timestamp is None:
         return None
-    if isinstance(timestamp, date):
+    if type(timestamp) is datetime:
+        return int(timestamp.replace(tzinfo=timezone.utc).timestamp())
+    if type(timestamp) is date:
         return int(datetime.combine(
                     timestamp, 
                     datetime.min.time())
                     .replace(tzinfo=timezone.utc)
                     .timestamp())
-    elif isinstance(timestamp, datetime):
-        return int(timestamp.replace(tzinfo=timezone.utc).timestamp())
     else:
         return int(timestamp)
 
