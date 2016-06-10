@@ -13,6 +13,8 @@ import requests
 from datetime import datetime, date, timezone
 import os
 import json
+import argparse
+import xlrd
 
 import config
 
@@ -27,10 +29,10 @@ def to_epoch(timestamp=None):
         return int(timestamp.replace(tzinfo=timezone.utc).timestamp())
     if type(timestamp) is date:
         return int(datetime.combine(
-                    timestamp, 
-                    datetime.min.time())
-                    .replace(tzinfo=timezone.utc)
-                    .timestamp())
+            timestamp,
+            datetime.min.time())
+            .replace(tzinfo=timezone.utc)
+            .timestamp())
     else:
         return int(timestamp)
 
@@ -68,7 +70,7 @@ class Scraper(object):
         Retrieves a question with all answers and comments
         """
         url = (
-            config.API_BASE_URL + 
+            config.API_BASE_URL +
             "%s?order=desc&sort=activity&site=stackoverflow&filter="
             "!)Ehv2Yl*OQfQ*ji0eSXZuEg.YqNfPFiEVg2emRci8aiNY.Xc-"
         ) % question_id
@@ -88,16 +90,19 @@ class Scraper(object):
         if todate:
             url += "todate=%i" % to_epoch(todate)
 
-        items = requests.get(url).json().get("items")
+        resp = requests.get(url).json()
+        ### print(json.dumps(resp, indent=4))
+        items = resp.get("items")
         for item in items:
             yield item
 
-    def post_site_name(self, post_url):
+    def find_site_by_url(self, url):
+
         for site in self.sites.values():
-            if post_url.startswith(site["site_url"]):
-                return site["name"]
+            if url.startswith(site["site_url"]):
+                return site
         else:
-            return "SITE NOT FOUND"
+            raise Exception("Site not found for %r" % url)
 
     def to_output_json(self, item, site=None):
         """
@@ -117,10 +122,11 @@ class Scraper(object):
         """
 
         if site:
-            site_name = self.sites[site]
+            site_name = self.sites[site]["name"]
         else:
-            site_name = self.post_site_name(item["link"])
+            site_name = self.find_site_by_url(item["link"])["name"]
 
+        # collect words:
         words = item["body_markdown"]
         if item["is_answered"]:
             words += ' ' + ' '.join(a["body_markdown"]
@@ -144,22 +150,60 @@ class Scraper(object):
             }
         }
 
-    @classmethod
-    def process(cls, site="meta"):
+    def process_site(self, *, site="meta"):
         """
         Collects data for a single Stackexchange site and 
         stores extracted JSON  on $OUTPUT_DIR/`site API name`.
         """
 
-        scraper = cls()
         output_dir = os.path.join(config.OUTPUT_DIR, site)
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        for q in scraper.questions(site=site):
-            item = scraper.to_output_json(q)
+        for q in self.questions(site=site):
+            item = self.to_output_json(q)
             with open(os.path.join(output_dir, "%d.json" % q["question_id"]), "w") as of:
                 json.dump(item, of, sort_keys=True, indent=4)
 
+
+    def process_xls(self, *, file_name="stackexchange_forums.xlsx"):
+        """
+        Read the list of 'sites' from the Excel worksheet and
+        retrieve the question/ansers.
+
+        Expected format is (site name, site URL), eg,
+        Stack Overflow | http://stackoverflow.com/
+        Super User	   | http://superuser.com/
+        Ask Ubuntu	   | http://askubuntu.com/
+        ...
+        """
+
+        book = xlrd.open_workbook(file_name)
+        sheet = book.sheet_by_index(0)
+        for rx in range(sheet.nrows):
+            site_name, site_url = (c.value for c in sheet.row(rx))
+            site = self.find_site_by_url(site_url)
+            print("*** Processing: %s (%s)" % (site_name, site_url))
+            self.process_site(site=site["api_site_parameter"])
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Stackexchange site "
+                                     "parser and scraper.")
+    parser.add_argument('-e', '--excel', dest='excel',
+                        help=('Excel spreasheet workbook file name '
+                              'containing list of the sites.'))
+    parser.add_argument('-s', '--site', dest='site',
+                        help=('Single Stackexchange site API name, e.g., '
+                              '"meta", "stacoverflow", etc. (default: "meta")'),
+                        default="meta")
+
+    args = parser.parse_args()
+    scraper = Scraper()
+    if args.excel:
+        scraper.process_xls(file_name=args.excel)
+    else:
+        scraper.process_site(site=args.site)
+
 if __name__ == '__main__':
-    Scraper.process(site="meta")
+    main()

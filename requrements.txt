@@ -1,5 +1,6 @@
 requests
 beautifulsoup4
+xlrd
 # for testing:
 responses
 pytest
