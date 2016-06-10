@@ -162,7 +162,8 @@ class Scraper(object):
 
         for q in self.questions(site=site):
             item = self.to_output_json(q)
-            with open(os.path.join(output_dir, "%d.json" % q["question_id"]), "w") as of:
+            with open(os.path.join(output_dir,
+                    "stackexchange_%s_%d.json" % (site, q["question_id"])), "w") as of:
                 json.dump(item, of, sort_keys=True, indent=4)
 
 
