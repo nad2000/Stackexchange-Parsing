@@ -139,8 +139,8 @@ class Scraper(object):
         creation_date = datetime.fromtimestamp(
             item["creation_date"]).isoformat()
         return {
-            "abstract": item["title"],
             "external_id": external_id,
+            "abstract": item["title"],
             "date": creation_date,
             "title": item["title"],
             "url": item["link"],
@@ -164,7 +164,7 @@ class Scraper(object):
             item = self.to_output_json(q)
             with open(os.path.join(output_dir,
                     "stackexchange_%s_%d.json" % (site, q["question_id"])), "w") as of:
-                json.dump(item, of, sort_keys=True, indent=4)
+                json.dump(item, of, indent=4)
 
 
     def process_xls(self, *, file_name="stackexchange_forums.xlsx"):
