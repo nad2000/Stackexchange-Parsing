@@ -10,7 +10,7 @@
 # -------------------------------------------------------------------------
 
 import requests
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import os
 import json
 
@@ -26,9 +26,11 @@ def to_epoch(timestamp=None):
     if isinstance(timestamp, date):
         return int(datetime.combine(
                     timestamp, 
-                    datetime.min.time()).timestamp())
+                    datetime.min.time())
+                    .replace(tzinfo=timezone.utc)
+                    .timestamp())
     elif isinstance(timestamp, datetime):
-        return int(timestamp.timestamp())
+        return int(timestamp.replace(tzinfo=timezone.utc).timestamp())
     else:
         return int(timestamp)
 
