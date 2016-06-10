@@ -9,7 +9,6 @@
 # Licence:  WTFPL
 # -------------------------------------------------------------------------
 
-import requests
 import responses
 import re
 import os
