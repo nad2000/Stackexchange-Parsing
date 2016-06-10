@@ -15,6 +15,7 @@ import os
 import json
 import argparse
 import xlrd
+from collections import OrderedDict
 
 import config
 
@@ -133,22 +134,21 @@ class Scraper(object):
                                     for a in item["answers"])
 
         external_id = ("stackexchange_%s_%s" % (
-            item["title"],
-            site_name)).replace(' ', '_')
+            site_name, item["title"])).replace(' ', '_')
 
         creation_date = datetime.fromtimestamp(
             item["creation_date"]).isoformat()
-        return {
-            "external_id": external_id,
-            "abstract": item["title"],
-            "date": creation_date,
-            "title": item["title"],
-            "url": item["link"],
-            "words": words,
-            "meta": {
-                "stackexchange": {}
-            }
-        }
+        return OrderedDict([
+            ("external_id", external_id),
+            ("abstract", item["title"]),
+            ("date", creation_date),
+            ("title", item["title"]),
+            ("url", item["link"]),
+            ("words", words),
+            ("meta", {
+                "stackexchange": {"forum": site_name}
+            })
+        ])
 
     def process_site(self, *, site="meta"):
         """
