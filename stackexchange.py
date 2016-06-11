@@ -134,7 +134,7 @@ class Scraper(object):
                                     for a in item["answers"])
 
         external_id = ("stackexchange_%s_%s" % (
-            site_name, item["title"])).replace(' ', '_')
+            site_name, item["title"])).replace(' ', '-')
 
         creation_date = datetime.fromtimestamp(
             item["creation_date"]).isoformat()
