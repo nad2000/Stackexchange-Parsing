@@ -16,6 +16,7 @@ import json
 import argparse
 import xlrd
 from collections import OrderedDict
+import tinys3
 
 import config
 
@@ -49,6 +50,29 @@ def lazy_property(fn):
             setattr(self, attr_name, fn(self))
         return getattr(self, attr_name)
     return _lazy_property
+    
+    
+class S3Bucket(object):
+
+    @lazy_property
+    def conn(self):
+        """
+        Establishes connection to S3 bucket
+        """
+        return tinys3.Connection(
+            config.S3_ACCESS_KEY,
+            config.S3_SECRET_KEY,
+            default_bucket=self.name)
+    
+    def __init__(self, name=None):
+        self.name = name if name else config.S3_BUCKET
+
+    def upload(self, file_name):
+    
+        _, output_file_name = os.path.split(file_name)
+
+        with open(file_name,'rb') as f:
+            self.conn.upload(output_file_name, f)
 
 
 class Scraper(object):
@@ -65,6 +89,10 @@ class Scraper(object):
                "!SmNnbu6IrvLP5nC(hk")
         items = requests.get(url).json().get("items")
         return {item["api_site_parameter"]: item for item in items}
+        
+    @lazy_property
+    def bucket(self):
+        return S3Bucket()
 
     def get_question(self, question_id):
         """
@@ -162,10 +190,12 @@ class Scraper(object):
 
         for q in self.questions(site=site):
             item = self.to_output_json(q)
-            with open(os.path.join(output_dir,
-                    "stackexchange_%s_%d.json" % (site, q["question_id"])), "w") as of:
+            file_name = os.path.join(output_dir,
+                    "stackexchange_%s_%d.json" % (site, q["question_id"]))
+            with open(file_name, "w") as of:
                 json.dump(item, of, indent=4)
-
+                
+            self.bucket.upload(file_name)
 
     def process_xls(self, *, file_name="stackexchange_forums.xlsx"):
         """
