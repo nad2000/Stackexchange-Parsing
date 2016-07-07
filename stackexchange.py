@@ -5,10 +5,11 @@
 #
 # Author:   Radomirs Cirskis
 #
-# Created:  2016-10-06
+# Created:  2016-07-06
 # Licence:  WTFPL
 # -------------------------------------------------------------------------
 
+## NB! on MS Windows set UTF-8 for the console (cmd.exe): chcp 65001
 import requests
 from datetime import datetime, date, timezone
 import os
@@ -17,6 +18,8 @@ import argparse
 import xlrd
 from collections import OrderedDict
 import tinys3
+from multiprocessing import Pool, TimeoutError
+import time
 
 import config
 
@@ -50,8 +53,8 @@ def lazy_property(fn):
             setattr(self, attr_name, fn(self))
         return getattr(self, attr_name)
     return _lazy_property
-    
-    
+
+
 class S3Bucket(object):
 
     @lazy_property
@@ -63,15 +66,15 @@ class S3Bucket(object):
             config.S3_ACCESS_KEY,
             config.S3_SECRET_KEY,
             default_bucket=self.name)
-    
+
     def __init__(self, name=None):
         self.name = name if name else config.S3_BUCKET
 
     def upload(self, file_name):
-    
+
         _, output_file_name = os.path.split(file_name)
 
-        with open(file_name,'rb') as f:
+        with open(file_name, 'rb') as f:
             self.conn.upload(output_file_name, f)
 
 
@@ -80,6 +83,10 @@ class Scraper(object):
     Encapsulates Stackexchange scraping
     """
 
+    def __init__(self, s3=True, workers=config.WORKERS):
+        self.s3 = s3
+        self.workers = workers
+
     @lazy_property
     def sites(self):
         """
@@ -87,9 +94,22 @@ class Scraper(object):
         """
         url = (config.API_BASE_URL + "sites?pagesize=10000&filter="
                "!SmNnbu6IrvLP5nC(hk")
-        items = requests.get(url).json().get("items")
-        return {item["api_site_parameter"]: item for item in items}
         
+        for delay in range(3, 28, 5):  # 5 attempts MAX with increasing delay
+            resp = requests.get(url).json()
+            if "error_id" in resp:
+                if resp["error_id"] != 502:
+                    print("!!! Error querying the site '%s':" % site)
+                    print(json.dumps(resp, indent=4))
+                time.sleep(delay)  # wait for a while
+            else:
+                break  # success
+        else:
+            return {}
+            
+        items = resp.get("items")
+        return {item["api_site_parameter"]: item for item in items}
+
     @lazy_property
     def bucket(self):
         return S3Bucket()
@@ -119,11 +139,35 @@ class Scraper(object):
         if todate:
             url += "todate=%i" % to_epoch(todate)
 
-        resp = requests.get(url).json()
-        ### print(json.dumps(resp, indent=4))
+        for delay in range(3, 28, 5):  # 5 attempts MAX with increasing delay
+            resp = requests.get(url).json()
+            if "error_id" in resp:
+                if resp["error_id"] != 502:
+                    print("!!! Error querying the site '%s':" % site)
+                    print(json.dumps(resp, indent=4))
+                time.sleep(delay)  # wait for a while
+            else:
+                break  # success
+                
+        else:
+            print("!!! Failed to retrieve the questions form the site '%s'" % site)
+            return
+            
         items = resp.get("items")
-        for item in items:
-            yield item
+        if items:
+            for item in items:
+                yield item
+        else:
+            print("!!! No items found for the site '%s'" % site)
+            
+
+    def site_url(self, site):
+        s = self.sites.get(site)
+        return s.get("site_url") if s else None
+        
+    def site_name(self, site):
+        s = self.sites.get(site)
+        return s.get("name") if s else None
 
     def find_site_by_url(self, url):
 
@@ -157,7 +201,7 @@ class Scraper(object):
 
         # collect words:
         words = item["body_markdown"]
-        if item["is_answered"]:
+        if item["is_answered"] and "answers" in item:
             words += ' ' + ' '.join(a["body_markdown"]
                                     for a in item["answers"])
 
@@ -191,11 +235,46 @@ class Scraper(object):
         for q in self.questions(site=site):
             item = self.to_output_json(q)
             file_name = os.path.join(output_dir,
-                    "stackexchange_%s_%d.json" % (site, q["question_id"]))
+                                     "stackexchange_%s_%d.json" % (site, q["question_id"]))
             with open(file_name, "w") as of:
                 json.dump(item, of, indent=4)
-                
-            self.bucket.upload(file_name)
+
+            if self.s3:
+                self.bucket.upload(file_name)
+
+    def process_sites(self, *, sites):
+        """
+        Process sites in parallel
+        """
+        
+        if self.workers <= 1:  # single worker
+            for site in sites:
+                site_url = self.site_url(site)
+                site_name = self.site_name(site)
+                self.process_site(site=site)
+                print("*** %s (%s) processed" % (site_name, site_url))
+        else:
+            with Pool(processes=self.workers) as pool:
+                params = dict(s3=self.s3)
+                site_data = [(s, params) for s in sites]
+                for res in pool.starmap(process_site, site_data):
+                    site = res.get("site")
+                    params = res.get("params")
+                    site_url = self.site_url(site)
+                    site_name = self.site_name(site)
+                    
+                    print("*** %s (%s) processed" % (site_name, site_url))
+
+    def get_sites(self, *, file_name="stackexchange_forums.xlsx"):
+        """
+        Extrast site names form the excel workbook
+        """
+        book = xlrd.open_workbook(file_name)
+        sheet = book.sheet_by_index(0)
+        for rx in range(sheet.nrows):
+            site_name, site_url = (c.value for c in sheet.row(rx))
+            site = self.find_site_by_url(site_url)
+            yield site["api_site_parameter"]
 
     def process_xls(self, *, file_name="stackexchange_forums.xlsx"):
         """
@@ -209,18 +288,28 @@ class Scraper(object):
         ...
         """
 
-        book = xlrd.open_workbook(file_name)
-        sheet = book.sheet_by_index(0)
-        for rx in range(sheet.nrows):
-            site_name, site_url = (c.value for c in sheet.row(rx))
-            site = self.find_site_by_url(site_url)
-            print("*** Processing: %s (%s)" % (site_name, site_url))
-            self.process_site(site=site["api_site_parameter"])
+        sites = self.get_sites(file_name=file_name)
+        self.process_sites(sites=sites)
+
+
+def process_site(site="meta", params={}):
+    """
+    Module level function for parallel invocation
+    """
+    s3 = params.get("s3", False)  # Parameters passed trough the pool
+    scraper = Scraper(s3=s3)
+    scraper.process_site(site=site)
+    return dict(site=site, params=params)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Stackexchange site "
                                      "parser and scraper.")
+    parser.add_argument('-W', '--workers', dest='workers',
+                        help='Number of worker processes (default: %d)' % config.WORKERS, type=int, default=config.WORKERS)
+    parser.add_argument('--no-s3', dest='s3', action='store_false',
+                        help='Suppress file upload to S3')
+    parser.set_defaults(s3=True)
     parser.add_argument('-e', '--excel', dest='excel',
                         help=('Excel spreasheet workbook file name '
                               'containing list of the sites.'))
@@ -230,7 +319,7 @@ def main():
                         default="meta")
 
     args = parser.parse_args()
-    scraper = Scraper()
+    scraper = Scraper(s3=args.s3, workers=args.workers)
     if args.excel:
         scraper.process_xls(file_name=args.excel)
     else:

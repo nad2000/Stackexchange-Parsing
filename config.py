@@ -1,4 +1,5 @@
 import configparser
+from multiprocessing import cpu_count
 import sys
 import os
 
@@ -23,3 +24,6 @@ API_BASE_URL = API_BASE + API_VERSION + '/'
 S3_ACCESS_KEY = __config.get("access_key")
 S3_SECRET_KEY = __config.get("secret_key")
 S3_BUCKET = __config.get("bucket")
+
+# Number of workers for parallel processing (default - number of CPUs):
+WORKERS = int(__config.get("workers", cpu_count()))
