@@ -84,9 +84,22 @@ class Scraper(object):
     Encapsulates Stackexchange scraping
     """
 
-    def __init__(self, s3=True, workers=config.WORKERS):
+    def __init__(self, s3=True, workers=config.WORKERS, verbose=False):
         self.s3 = s3
         self.workers = workers
+        self.verbose = verbose
+        _ = self.sites  ## pre-cache the 'sites'
+        
+    @lazy_property
+    def output_dir(self):
+        """
+        Determines the output directory from the configuration 
+        and creates it if it doesn't exist yet.
+        """
+        output_dir = os.path.join(config.OUTPUT_DIR)
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        return output_dir
         
     @lazy_property
     def ua(self):
@@ -102,9 +115,7 @@ class Scraper(object):
         Returns a dictionary of all Stackexchange sites
         """
         
-        sites_json_filename = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "sites.json")
+        sites_json_filename = os.path.join(self.output_dir, "sites.json")
             
         if os.path.exists(sites_json_filename):
             with open(sites_json_filename, "r") as sf:
@@ -160,45 +171,69 @@ class Scraper(object):
         """
         Generator for retrieving the questions starting from `fromdate` till `todate`
         `fromdate` and `todate` are either datetime, date, or int (Unix Epoch)
+        
+        The iterator will continue to retrieve the items until the output is
+        empty or the flag "has_more" is set FALSE, eg:
+        
+            {
+                items: [],
+                has_more: true,
+                quota_max: 300,
+                quota_remaining: 295
+            }
         """
-        url = (config.API_BASE_URL + "questions?filter="
-               "!)Ehv2Yl*OhhLOkeHr5)YcUAgEK*(hc7aypu_0Y_ehVcszKs.-"
-               "&order=desc&sort=creation"
-               "&site=" + site)
-        if fromdate:
-            url += "fromdate=%i" % to_epoch(fromdate)
-        if todate:
-            url += "todate=%i" % to_epoch(todate)
+        
+        page = 1
+        
+        while True:  ## executes until reached the end:
+        
+            if self.verbose:
+                print("*** Processing site %r, page %d." % (site, page))
 
-        for delay in range(3, 28, 5):  # 5 attempts MAX with increasing delay
-            try:
-                resp = requests.get(
-                        url,
-                        headers={'User-Agent': self.user_agent}).json()
-            except requests.exceptions.ConnectionError as ex:
-                print("!!!", ex)
-                time.sleep(delay)
-                continue
+            url = (config.API_BASE_URL + "questions?filter="
+                   "!)Ehv2Yl*OhhLOkeHr5)YcUAgEK*(hc7aypu_0Y_ehVcszKs.-"
+                   "&order=desc&sort=creation"
+                   "&site=%s&page=%d" % (site, page))
+            if fromdate:
+                url += "fromdate=%i" % to_epoch(fromdate)
+            if todate:
+                url += "todate=%i" % to_epoch(todate)
 
-            if "error_id" in resp:
-                if resp["error_id"] != 502:
-                    print("!!! Error querying the site '%s':" % site)
-                    print(json.dumps(resp, indent=4))
-                time.sleep(delay)  # wait for a while
+            for delay in range(3, 53, 5):  # 10 attempts MAX with increasing delay
+                try:
+                    resp = requests.get(
+                            url,
+                            headers={'User-Agent': self.user_agent}).json()
+                except requests.exceptions.ConnectionError as ex:
+                    print("!!!", ex)
+                    time.sleep(delay)
+                    continue
+
+                if "error_id" in resp:
+                    if resp["error_id"] != 502:
+                        print("!!! Error querying the site '%s':" % site)
+                        print(json.dumps(resp, indent=4))
+                    time.sleep(delay)  # wait for a while
+                else:
+                    break  # success
+                    
             else:
-                break  # success
+                print("!!! Failed to retrieve the questions form the site '%s'" % site)
+                return
                 
-        else:
-            print("!!! Failed to retrieve the questions form the site '%s'" % site)
-            return
+            items = resp.get("items")
+            if items:
+                for item in items:
+                    yield item
+            else:
+                if page == 1:
+                    print("!!! No items found for the site '%s'" % site)
+                break  ## reached 'END'
             
-        items = resp.get("items")
-        if items:
-            for item in items:
-                yield item
-        else:
-            print("!!! No items found for the site '%s'" % site)
+            if not resp.get("has_more"):  ## the last page reached
+                break
             
+            page += 1
 
     def site_url(self, site):
         s = self.sites.get(site)
@@ -267,10 +302,10 @@ class Scraper(object):
         stores extracted JSON  on $OUTPUT_DIR/`site API name`.
         """
 
-        output_dir = os.path.join(config.OUTPUT_DIR, site)
+        output_dir = os.path.join(self.output_dir, site)
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-
+            
         for q in self.questions(site=site):
             item = self.to_output_json(q)
             file_name = os.path.join(output_dir,
@@ -346,6 +381,10 @@ def main():
                                      "parser and scraper.")
     parser.add_argument('-W', '--workers', dest='workers',
                         help='Number of worker processes (default: %d)' % config.WORKERS, type=int, default=config.WORKERS)
+    parser.add_argument('-V', '--verbose', action='store_true',
+                        help='Provides more detailed output.')
+    parser.add_argument('-l', '--list-sites', action='store_true',
+                        help='List all available sites.')
     parser.add_argument('--no-s3', dest='s3', action='store_false',
                         help='Suppress file upload to S3')
     parser.set_defaults(s3=True)
@@ -358,8 +397,12 @@ def main():
                         default="meta")
 
     args = parser.parse_args()
-    scraper = Scraper(s3=args.s3, workers=args.workers)
-    if args.excel:
+    scraper = Scraper(s3=args.s3, workers=args.workers, verbose=ags.verbose)
+    if args.list_sites:
+        for name, site in scraper.sites.items():
+            print((
+                "*** %(api_site_parameter)s:\nName: %(name)s, Type: %(site_type)s, " "URL: %(site_url)s, State: %(site_state)s") % site)
+    elif args.excel:
         scraper.process_xls(file_name=args.excel)
     else:
         scraper.process_site(site=args.site)
