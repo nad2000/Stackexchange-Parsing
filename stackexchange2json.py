@@ -20,6 +20,7 @@ from collections import OrderedDict
 import tinys3
 from multiprocessing import Pool, TimeoutError
 import time
+from fake_useragent import UserAgent
 
 import config
 
@@ -86,29 +87,59 @@ class Scraper(object):
     def __init__(self, s3=True, workers=config.WORKERS):
         self.s3 = s3
         self.workers = workers
-
+        
+    @lazy_property
+    def ua(self):
+        return UserAgent()
+        
+    @property
+    def user_agent(self):
+        return self.ua.random
+        
     @lazy_property
     def sites(self):
         """
         Returns a dictionary of all Stackexchange sites
         """
-        url = (config.API_BASE_URL + "sites?pagesize=10000&filter="
-               "!SmNnbu6IrvLP5nC(hk")
         
-        for delay in range(3, 28, 5):  # 5 attempts MAX with increasing delay
-            resp = requests.get(url).json()
-            if "error_id" in resp:
-                if resp["error_id"] != 502:
-                    print("!!! Error querying the site '%s':" % site)
-                    print(json.dumps(resp, indent=4))
-                time.sleep(delay)  # wait for a while
-            else:
-                break  # success
-        else:
-            return {}
+        sites_json_filename = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "sites.json")
             
-        items = resp.get("items")
-        return {item["api_site_parameter"]: item for item in items}
+        if os.path.exists(sites_json_filename):
+            with open(sites_json_filename, "r") as sf:
+                sites = json.load(sf)
+                
+        else:
+        
+            url = (config.API_BASE_URL + "sites?pagesize=10000&filter="
+                   "!SmNnbu6IrvLP5nC(hk")
+            
+            for delay in range(3, 28, 5):  # 5 attempts MAX with increasing delay
+                try:
+                    resp = requests.get(
+                            url,
+                            headers={'User-Agent': self.user_agent}).json()
+                except requests.exceptions.ConnectionError as ex:
+                    print("!!!", ex)
+                    time.sleep(delay)
+                    continue
+                    
+                if "error_id" in resp:
+                    if resp["error_id"] != 502:
+                        print("!!! Error querying the site '%s':" % site)
+                        print(json.dumps(resp, indent=4))
+                    time.sleep(delay)  # wait for a while
+                else:
+                    break  # success
+            else:
+                return {}
+            
+            sites = {item["api_site_parameter"]: item for item in resp.get("items")}
+            with open(sites_json_filename, "w") as sf:
+                json.dump(sites, sf)
+            
+        return sites
 
     @lazy_property
     def bucket(self):
@@ -140,7 +171,15 @@ class Scraper(object):
             url += "todate=%i" % to_epoch(todate)
 
         for delay in range(3, 28, 5):  # 5 attempts MAX with increasing delay
-            resp = requests.get(url).json()
+            try:
+                resp = requests.get(
+                        url,
+                        headers={'User-Agent': self.user_agent}).json()
+            except requests.exceptions.ConnectionError as ex:
+                print("!!!", ex)
+                time.sleep(delay)
+                continue
+
             if "error_id" in resp:
                 if resp["error_id"] != 502:
                     print("!!! Error querying the site '%s':" % site)

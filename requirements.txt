@@ -2,6 +2,7 @@ requests
 beautifulsoup4
 xlrd
 tinys3
+fake-useragent
 # for testing:
 responses
 pytest
